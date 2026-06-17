@@ -1,5 +1,5 @@
-import fs from "node:fs/promises";
-import path from "node:path";
+import fs from 'node:fs/promises';
+import path from 'node:path';
 
 const STATE_DIR_MODE = 0o700;
 const STATE_FILE_MODE = 0o600;
@@ -10,9 +10,15 @@ export interface UserState {
   lastSeenAt: string;
 }
 
+export interface GroupChatState {
+  enabled: boolean;
+  resetAt?: string;
+}
+
 export interface BridgeState {
   lastActiveUserId?: string;
   users?: Record<string, UserState>;
+  groupChats?: Record<string, GroupChatState>;
 }
 
 export interface ResolvedUserTarget {
@@ -22,20 +28,29 @@ export interface ResolvedUserTarget {
 
 export async function loadState(stateFile: string): Promise<BridgeState> {
   try {
-    const content = await fs.readFile(stateFile, "utf-8");
+    const content = await fs.readFile(stateFile, 'utf-8');
     return JSON.parse(content) as BridgeState;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
     throw err;
   }
 }
 
-export async function saveState(stateFile: string, state: BridgeState): Promise<void> {
-  await fs.mkdir(path.dirname(stateFile), { recursive: true, mode: STATE_DIR_MODE });
+export async function saveState(
+  stateFile: string,
+  state: BridgeState,
+): Promise<void> {
+  await fs.mkdir(path.dirname(stateFile), {
+    recursive: true,
+    mode: STATE_DIR_MODE,
+  });
   await fs.chmod(path.dirname(stateFile), STATE_DIR_MODE).catch(() => {});
-  const tmp = path.join(path.dirname(stateFile), `.state-${process.pid}-${Date.now()}.tmp`);
-  await fs.writeFile(tmp, JSON.stringify(state, null, 2) + "\n", {
-    encoding: "utf-8",
+  const tmp = path.join(
+    path.dirname(stateFile),
+    `.state-${process.pid}-${Date.now()}.tmp`,
+  );
+  await fs.writeFile(tmp, JSON.stringify(state, null, 2) + '\n', {
+    encoding: 'utf-8',
     mode: STATE_FILE_MODE,
   });
   await fs.chmod(tmp, STATE_FILE_MODE).catch(() => {});
@@ -66,15 +81,20 @@ export async function resolveUserTarget(
   contextToken?: string,
 ): Promise<ResolvedUserTarget> {
   const state = await loadState(stateFile);
-  const userId = !target || target === "last-active-user" ? state.lastActiveUserId : target;
+  const userId =
+    !target || target === 'last-active-user' ? state.lastActiveUserId : target;
   if (!userId) {
-    throw new Error("No last active user found. Send any message to this WeChat bot once, then retry.");
+    throw new Error(
+      'No last active user found. Send any message to this Yuanbao bot once, then retry.',
+    );
   }
 
   const stored = state.users?.[userId];
   const resolvedContextToken = contextToken ?? stored?.contextToken;
   if (!resolvedContextToken) {
-    throw new Error(`No context token found for target user ${userId}. Ask the user to send a new message first.`);
+    throw new Error(
+      `No context token found for target user ${userId}. Ask the user to send a new message first.`,
+    );
   }
 
   return {
@@ -83,12 +103,59 @@ export async function resolveUserTarget(
   };
 }
 
+export async function getGroupChatState(
+  stateFile: string,
+  chatId: string,
+): Promise<GroupChatState> {
+  const state = await loadState(stateFile);
+  const stored = state.groupChats?.[chatId];
+  return {
+    enabled: stored?.enabled ?? true,
+    resetAt: stored?.resetAt,
+  };
+}
+
+export async function setGroupChatEnabled(
+  stateFile: string,
+  chatId: string,
+  enabled: boolean,
+): Promise<void> {
+  const state = await loadState(stateFile);
+  state.groupChats = {
+    ...(state.groupChats ?? {}),
+    [chatId]: {
+      ...(state.groupChats?.[chatId] ?? {}),
+      enabled,
+    },
+  };
+  await saveState(stateFile, state);
+}
+
+export async function markGroupChatReset(
+  stateFile: string,
+  chatId: string,
+): Promise<void> {
+  const state = await loadState(stateFile);
+  state.groupChats = {
+    ...(state.groupChats ?? {}),
+    [chatId]: {
+      ...(state.groupChats?.[chatId] ?? { enabled: true }),
+      enabled: state.groupChats?.[chatId]?.enabled ?? true,
+      resetAt: new Date().toISOString(),
+    },
+  };
+  await saveState(stateFile, state);
+}
+
 async function replaceFile(tmp: string, target: string): Promise<void> {
   try {
     await fs.rename(tmp, target);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
-    if (process.platform !== "win32" || (code !== "EEXIST" && code !== "EPERM")) {
+    if (
+      process.platform !== 'win32' ||
+      (code !== 'EEXIST' && code !== 'EPERM')
+    ) {
       throw err;
     }
     await fs.rm(target, { force: true });
@@ -96,13 +163,17 @@ async function replaceFile(tmp: string, target: string): Promise<void> {
   }
 }
 
-function pruneUsers(users: Record<string, UserState>): Record<string, UserState> {
+function pruneUsers(
+  users: Record<string, UserState>,
+): Record<string, UserState> {
   const entries = Object.entries(users);
   if (entries.length <= MAX_STORED_USERS) return users;
 
   return Object.fromEntries(
     entries
-      .sort(([, left], [, right]) => right.lastSeenAt.localeCompare(left.lastSeenAt))
+      .sort(([, left], [, right]) =>
+        right.lastSeenAt.localeCompare(left.lastSeenAt),
+      )
       .slice(0, MAX_STORED_USERS),
   );
 }

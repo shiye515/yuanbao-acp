@@ -1,7 +1,7 @@
 {
-  "name": "wechat-acp",
-  "version": "0.8.0",
-  "description": "Bridge WeChat to any ACP-compatible AI agent",
+  "name": "yuanbao-acp",
+  "version": "0.8.6",
+  "description": "Bridge Tencent Yuanbao to any ACP-compatible AI agent",
   "type": "module",
   "files": [
     "dist/",
@@ -9,7 +9,7 @@
     "package.json"
   ],
   "bin": {
-    "wechat-acp": "./dist/bin/wechat-acp.js"
+    "yuanbao-acp": "./dist/bin/yuanbao-acp.js"
   },
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
@@ -22,17 +22,18 @@
   "scripts": {
     "build": "tsc",
     "prepack": "npm run build",
-    "start": "node dist/bin/wechat-acp.js",
+    "start": "node dist/bin/yuanbao-acp.js",
     "dev": "tsc --watch",
     "test": "node --import tsx/esm --test tests/**/*.ts"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.16.1",
     "applicationinsights": "^2.9.6",
-    "qrcode-terminal": "^0.12.0"
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.13",
     "tsx": "^4.22.3",
     "typescript": "^5.5.0"
   },
@@ -41,15 +42,16 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/formulahendry/wechat-acp.git"
+    "url": "git+https://github.com/shiye515/yuanbao-acp.git"
   },
-  "homepage": "https://github.com/formulahendry/wechat-acp#readme",
+  "homepage": "https://github.com/shiye515/yuanbao-acp#readme",
   "bugs": {
-    "url": "https://github.com/formulahendry/wechat-acp/issues"
+    "url": "https://github.com/shiye515/yuanbao-acp/issues"
   },
   "license": "MIT",
   "keywords": [
-    "wechat",
+    "yuanbao",
+    "tencent",
     "acp",
     "agent-client-protocol",
     "ai-agent",

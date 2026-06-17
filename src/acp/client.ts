@@ -1,5 +1,5 @@
 /**
- * ACP Client implementation for WeChat.
+ * ACP Client implementation for YuanBao.
  *
  * Implements the acp.Client interface: handles session updates (accumulates
  * text chunks), auto-allows all permission requests, and provides filesystem
@@ -9,7 +9,7 @@
 import fs from "node:fs";
 import type * as acp from "@agentclientprotocol/sdk";
 
-export interface WeChatAcpClientOpts {
+export interface YuanBaoAcpClientOpts {
   sendTyping: () => Promise<void>;
   onThoughtFlush: (text: string) => Promise<void>;
   onMessageFlush: (text: string) => Promise<void>;
@@ -19,14 +19,14 @@ export interface WeChatAcpClientOpts {
   showDiffs?: boolean;
 }
 
-export class WeChatAcpClient implements acp.Client {
+export class YuanBaoAcpClient implements acp.Client {
   private chunks: string[] = [];
   private thoughtChunks: string[] = [];
-  private opts: WeChatAcpClientOpts;
+  private opts: YuanBaoAcpClientOpts;
   private lastTypingAt = 0;
   private producedMessageThisTurn = false;
   // Promise chain serializing onMessageFlush calls so concurrent boundary events
-  // cannot interleave sends (e.g. chunk B reaching WeChat before chunk A).
+  // cannot interleave sends (e.g. chunk B reaching YuanBao before chunk A).
   private messageFlushChain: Promise<void> = Promise.resolve();
   private static readonly TYPING_INTERVAL_MS = 5_000;
   private static readonly SEND_MAX_ATTEMPTS = 3;
@@ -42,7 +42,7 @@ export class WeChatAcpClient implements acp.Client {
     this.producedMessageThisTurn = false;
   }
 
-  constructor(opts: WeChatAcpClientOpts) {
+  constructor(opts: YuanBaoAcpClientOpts) {
     this.opts = opts;
   }
 
@@ -204,7 +204,7 @@ export class WeChatAcpClient implements acp.Client {
 
   /**
    * Stream the buffered agent message (and any embedded diffs) as its own
-   * WeChat reply. Called at thought/tool_call boundaries so multi-step turns
+   * YuanBao reply. Called at thought/tool_call boundaries so multi-step turns
    * surface narrative segments in order; the final segment is still returned
    * by `flush()` so the caller can append stop-reason suffixes.
    */
@@ -225,7 +225,7 @@ export class WeChatAcpClient implements acp.Client {
     // Acquire a send slot using a simple mutex chain: each caller saves the
     // current tail of the chain, replaces it with a new unresolved promise,
     // and awaits the old tail before sending. This guarantees strict FIFO
-    // ordering — chunk A always reaches WeChat before chunk B even when both
+    // ordering — chunk A always reaches YuanBao before chunk B even when both
     // boundary events fire nearly simultaneously.
     const prev = this.messageFlushChain;
     let resolve!: () => void;
@@ -254,20 +254,20 @@ export class WeChatAcpClient implements acp.Client {
   /**
    * Send with bounded retries and linear backoff (`SEND_RETRY_BASE_MS *
    * attempt`). Returns true on success, false if all attempts failed
-   * (logging each failure so transient WeChat send errors are surfaced
+   * (logging each failure so transient YuanBao send errors are surfaced
    * instead of silently swallowed).
    */
   private async sendWithRetry(send: () => Promise<void>, label: string): Promise<boolean> {
-    for (let attempt = 1; attempt <= WeChatAcpClient.SEND_MAX_ATTEMPTS; attempt++) {
+    for (let attempt = 1; attempt <= YuanBaoAcpClient.SEND_MAX_ATTEMPTS; attempt++) {
       try {
         await send();
         return true;
       } catch (err) {
         this.opts.log(
-          `[flush] ${label} send failed (attempt ${attempt}/${WeChatAcpClient.SEND_MAX_ATTEMPTS}): ${String(err)}`,
+          `[flush] ${label} send failed (attempt ${attempt}/${YuanBaoAcpClient.SEND_MAX_ATTEMPTS}): ${String(err)}`,
         );
-        if (attempt < WeChatAcpClient.SEND_MAX_ATTEMPTS) {
-          await new Promise((r) => setTimeout(r, WeChatAcpClient.SEND_RETRY_BASE_MS * attempt));
+        if (attempt < YuanBaoAcpClient.SEND_MAX_ATTEMPTS) {
+          await new Promise((r) => setTimeout(r, YuanBaoAcpClient.SEND_RETRY_BASE_MS * attempt));
         }
       }
     }
@@ -276,7 +276,7 @@ export class WeChatAcpClient implements acp.Client {
 
   private async maybeSendTyping(): Promise<void> {
     const now = Date.now();
-    if (now - this.lastTypingAt < WeChatAcpClient.TYPING_INTERVAL_MS) return;
+    if (now - this.lastTypingAt < YuanBaoAcpClient.TYPING_INTERVAL_MS) return;
     this.lastTypingAt = now;
     try {
       await this.opts.sendTyping();

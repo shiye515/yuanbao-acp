@@ -1,15 +1,20 @@
 /**
  * Per-user ACP session manager.
  *
- * Each WeChat user gets their own agent subprocess + ACP session.
+ * Each YuanBao user gets their own agent subprocess + ACP session.
  * Messages are queued per-user to ensure serialized processing.
  */
 
-import type { ChildProcess } from "node:child_process";
-import type * as acp from "@agentclientprotocol/sdk";
-import { WeChatAcpClient } from "./client.js";
-import { spawnAgent, killAgent, type AgentProcessInfo } from "./agent-manager.js";
-import { trackEvent, trackException, hashUserId } from "../telemetry/index.js";
+import type { ChildProcess } from 'node:child_process';
+import type * as acp from '@agentclientprotocol/sdk';
+import { YuanBaoAcpClient } from './client.js';
+import {
+  spawnAgent,
+  killAgent,
+  formatError,
+  type AgentProcessInfo,
+} from './agent-manager.js';
+import { trackEvent, trackException, hashUserId } from '../telemetry/index.js';
 
 /**
  * Build a short, user-friendly notice for a turn that ended without the
@@ -19,16 +24,16 @@ import { trackEvent, trackException, hashUserId } from "../telemetry/index.js";
  */
 function emptyTurnNotice(stopReason: acp.StopReason | undefined): string {
   switch (stopReason) {
-    case "max_tokens":
-      return "ℹ️ The agent stopped at its output length limit before sending a reply. Try a more specific or shorter request.";
-    case "max_turn_requests":
-      return "ℹ️ The agent reached its tool-call limit before sending a reply. Try again or narrow the task.";
-    case "refusal":
-      return "ℹ️ The agent declined to respond to this request.";
-    case "cancelled":
-      return "ℹ️ The request was cancelled before the agent sent a reply.";
+    case 'max_tokens':
+      return 'ℹ️ The agent stopped at its output length limit before sending a reply. Try a more specific or shorter request.';
+    case 'max_turn_requests':
+      return 'ℹ️ The agent reached its tool-call limit before sending a reply. Try again or narrow the task.';
+    case 'refusal':
+      return 'ℹ️ The agent declined to respond to this request.';
+    case 'cancelled':
+      return 'ℹ️ The request was cancelled before the agent sent a reply.';
     default:
-      return "ℹ️ The agent finished without sending a reply. Try rephrasing your request.";
+      return 'ℹ️ The agent finished without sending a reply. Try rephrasing your request.';
   }
 }
 
@@ -44,7 +49,7 @@ export interface PendingMessage {
 export interface UserSession {
   userId: string;
   contextToken: string;
-  client: WeChatAcpClient;
+  client: YuanBaoAcpClient;
   agentInfo: AgentProcessInfo;
   configOptions: acp.SessionConfigOption[];
   queue: PendingMessage[];
@@ -64,7 +69,11 @@ export interface SessionManagerOpts {
   showThoughts: boolean;
   showDiffs?: boolean;
   log: (msg: string) => void;
-  onReply: (userId: string, contextToken: string, text: string) => Promise<void>;
+  onReply: (
+    userId: string,
+    contextToken: string,
+    text: string,
+  ) => Promise<void>;
   sendTyping: (userId: string, contextToken: string) => Promise<void>;
 }
 
@@ -80,7 +89,10 @@ export class SessionManager {
 
   start(): void {
     // Run cleanup every 2 minutes
-    this.cleanupTimer = setInterval(() => this.cleanupIdleSessions(), 2 * 60_000);
+    this.cleanupTimer = setInterval(
+      () => this.cleanupIdleSessions(),
+      2 * 60_000,
+    );
     this.cleanupTimer.unref();
   }
 
@@ -93,7 +105,10 @@ export class SessionManager {
     // Kill all agent processes
     for (const [userId, session] of this.sessions) {
       this.opts.log(`Stopping session for ${userId}`);
-      this.rejectQueuedCompletions(session, new Error("Session stopped before queued message was processed"));
+      this.rejectQueuedCompletions(
+        session,
+        new Error('Session stopped before queued message was processed'),
+      );
       killAgent(session.agentInfo.process);
     }
     this.sessions.clear();
@@ -101,7 +116,7 @@ export class SessionManager {
 
   async enqueue(userId: string, message: PendingMessage): Promise<void> {
     if (this.aborted) {
-      throw new Error("Session manager is stopped");
+      throw new Error('Session manager is stopped');
     }
 
     let session = this.sessions.get(userId);
@@ -125,14 +140,14 @@ export class SessionManager {
       // Fire-and-forget processing loop for this user
       session.processing = true;
       this.processQueue(session).catch((err) => {
-        this.opts.log(`[${userId}] queue processing error: ${String(err)}`);
+        this.opts.log(`[${userId}] queue processing error: ${formatError(err)}`);
       });
     }
   }
 
   async enqueueAndWait(
     userId: string,
-    message: Omit<PendingMessage, "completion">,
+    message: Omit<PendingMessage, 'completion'>,
   ): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       this.enqueue(userId, {
@@ -146,7 +161,9 @@ export class SessionManager {
     return this.sessions.get(userId);
   }
 
-  getSessionConfigOptions(userId: string): acp.SessionConfigOption[] | undefined {
+  getSessionConfigOptions(
+    userId: string,
+  ): acp.SessionConfigOption[] | undefined {
     return this.sessions.get(userId)?.configOptions;
   }
 
@@ -157,13 +174,20 @@ export class SessionManager {
   ): Promise<acp.SessionConfigOption[]> {
     const session = this.sessions.get(userId);
     if (!session) {
-      throw new Error("No active ACP session for this chat yet. Send a normal message first.");
+      throw new Error(
+        'No active ACP session for this chat yet. Send a normal message first.',
+      );
     }
 
     session.lastActivity = Date.now();
     const response = await session.agentInfo.connection.setSessionConfigOption(
-      typeof value === "boolean"
-        ? { sessionId: session.agentInfo.sessionId, configId, type: "boolean", value }
+      typeof value === 'boolean'
+        ? {
+            sessionId: session.agentInfo.sessionId,
+            configId,
+            type: 'boolean',
+            value,
+          }
         : { sessionId: session.agentInfo.sessionId, configId, value },
     );
     session.configOptions = response.configOptions;
@@ -178,7 +202,7 @@ export class SessionManager {
    * The ACP `session/cancel` notification is fire-and-forget; the in-flight
    * `prompt()` call will resolve naturally with `stopReason: "cancelled"` and
    * the existing `processQueue` loop will flush whatever output was already
-   * streamed back to WeChat (with a `[cancelled]` suffix).
+   * streamed back to YuanBao (with a `[cancelled]` suffix).
    */
   async cancelCurrent(
     userId: string,
@@ -195,7 +219,7 @@ export class SessionManager {
     if (opts?.drainQueue && session.queue.length > 0) {
       const dropped = session.queue.splice(0);
       droppedQueueCount = dropped.length;
-      const err = new Error("Cancelled before queued message was processed");
+      const err = new Error('Cancelled before queued message was processed');
       for (const pending of dropped) {
         pending.completion?.reject(err);
       }
@@ -206,9 +230,11 @@ export class SessionManager {
     }
 
     try {
-      await session.agentInfo.connection.cancel({ sessionId: session.agentInfo.sessionId });
+      await session.agentInfo.connection.cancel({
+        sessionId: session.agentInfo.sessionId,
+      });
     } catch (err) {
-      this.opts.log(`[${userId}] cancel notification failed: ${String(err)}`);
+      this.opts.log(`[${userId}] cancel notification failed: ${formatError(err)}`);
     }
 
     return { cancelledTurn: true, droppedQueueCount };
@@ -218,10 +244,26 @@ export class SessionManager {
     return this.sessions.size;
   }
 
-  private async createSession(userId: string, contextToken: string): Promise<UserSession> {
+  async resetSession(userId: string): Promise<boolean> {
+    const session = this.sessions.get(userId);
+    if (!session) return false;
+
+    this.rejectQueuedCompletions(
+      session,
+      new Error('Session reset before queued message was processed'),
+    );
+    killAgent(session.agentInfo.process);
+    this.sessions.delete(userId);
+    return true;
+  }
+
+  private async createSession(
+    userId: string,
+    contextToken: string,
+  ): Promise<UserSession> {
     this.opts.log(`Creating new session for ${userId}`);
 
-    const client = new WeChatAcpClient({
+    const client = new YuanBaoAcpClient({
       sendTyping: () => this.opts.sendTyping(userId, contextToken),
       onThoughtFlush: (text) => this.opts.onReply(userId, contextToken, text),
       onMessageFlush: (text) => this.opts.onReply(userId, contextToken, text),
@@ -246,21 +288,24 @@ export class SessionManager {
     });
 
     trackEvent(
-      "session.created",
+      'session.created',
       {
         userIdHash: hashUserId(userId),
-        agentPreset: this.opts.agentPreset ?? "raw",
+        agentPreset: this.opts.agentPreset ?? 'raw',
         activeSessions: this.sessions.size + 1,
       },
       hashUserId(userId),
     );
 
     // If agent process exits, clean up the session
-    agentInfo.process.on("exit", () => {
+    agentInfo.process.on('exit', () => {
       const s = this.sessions.get(userId);
       if (s && s.agentInfo.process === agentInfo.process) {
         this.opts.log(`Agent process for ${userId} exited, removing session`);
-        this.rejectQueuedCompletions(s, new Error("Agent process exited before queued message was processed"));
+        this.rejectQueuedCompletions(
+          s,
+          new Error('Agent process exited before queued message was processed'),
+        );
         this.sessions.delete(userId);
       }
     });
@@ -286,9 +331,12 @@ export class SessionManager {
 
         // Keep the ACP client instance stable because the connection is bound to it.
         session.client.updateCallbacks({
-          sendTyping: () => this.opts.sendTyping(session.userId, pending.contextToken),
-          onThoughtFlush: (text) => this.opts.onReply(session.userId, pending.contextToken, text),
-          onMessageFlush: (text) => this.opts.onReply(session.userId, pending.contextToken, text),
+          sendTyping: () =>
+            this.opts.sendTyping(session.userId, pending.contextToken),
+          onThoughtFlush: (text) =>
+            this.opts.onReply(session.userId, pending.contextToken, text),
+          onMessageFlush: (text) =>
+            this.opts.onReply(session.userId, pending.contextToken, text),
         });
 
         // Reset chunks for the new turn
@@ -298,7 +346,9 @@ export class SessionManager {
         const promptStartedAt = Date.now();
         try {
           // Send typing immediately so user knows the prompt was received
-          this.opts.sendTyping(session.userId, pending.contextToken).catch(() => {});
+          this.opts
+            .sendTyping(session.userId, pending.contextToken)
+            .catch(() => {});
 
           // Send ACP prompt
           this.opts.log(`[${session.userId}] Sending prompt to agent...`);
@@ -310,19 +360,21 @@ export class SessionManager {
           // Collect accumulated text
           let replyText = await session.client.flush();
 
-          if (result.stopReason === "cancelled") {
-            replyText += "\n[cancelled]";
-          } else if (result.stopReason === "refusal") {
-            replyText += "\n[agent refused to continue]";
+          if (result.stopReason === 'cancelled') {
+            replyText += '\n[cancelled]';
+          } else if (result.stopReason === 'refusal') {
+            replyText += '\n[agent refused to continue]';
           }
 
-          this.opts.log(`[${session.userId}] Agent done (${result.stopReason}), reply ${replyText.length} chars`);
+          this.opts.log(
+            `[${session.userId}] Agent done (${result.stopReason}), reply ${replyText.length} chars`,
+          );
 
           trackEvent(
-            "prompt.completed",
+            'prompt.completed',
             {
               userIdHash: hashUserId(session.userId),
-              agentPreset: this.opts.agentPreset ?? "raw",
+              agentPreset: this.opts.agentPreset ?? 'raw',
               stopReason: String(result.stopReason),
               success: true,
               durationMs: Date.now() - promptStartedAt,
@@ -331,9 +383,13 @@ export class SessionManager {
             hashUserId(session.userId),
           );
 
-          // Send reply back to WeChat
+          // Send reply back to YuanBao
           if (replyText.trim()) {
-            await this.opts.onReply(session.userId, pending.contextToken, replyText);
+            await this.opts.onReply(
+              session.userId,
+              pending.contextToken,
+              replyText,
+            );
           } else if (!session.client.hasProducedMessage) {
             // The turn ended without the agent ever producing a textual reply
             // (e.g. it stopped after thoughts or a tool call). Surface a minimal
@@ -349,15 +405,17 @@ export class SessionManager {
           }
         } catch (err) {
           completionError = err;
-          this.opts.log(`[${session.userId}] Agent prompt error: ${String(err)}`);
+          this.opts.log(
+            `[${session.userId}] Agent prompt error: ${formatError(err)}`,
+          );
 
-          trackException(err, "prompt", hashUserId(session.userId));
+          trackException(err, 'prompt', hashUserId(session.userId));
           trackEvent(
-            "prompt.completed",
+            'prompt.completed',
             {
               userIdHash: hashUserId(session.userId),
-              agentPreset: this.opts.agentPreset ?? "raw",
-              stopReason: "error",
+              agentPreset: this.opts.agentPreset ?? 'raw',
+              stopReason: 'error',
               success: false,
               durationMs: Date.now() - promptStartedAt,
               replyChars: 0,
@@ -366,8 +424,13 @@ export class SessionManager {
           );
 
           // Check if agent died
-          if (session.agentInfo.process.killed || session.agentInfo.process.exitCode !== null) {
-            this.opts.log(`[${session.userId}] Agent process died, removing session`);
+          if (
+            session.agentInfo.process.killed ||
+            session.agentInfo.process.exitCode !== null
+          ) {
+            this.opts.log(
+              `[${session.userId}] Agent process died, removing session`,
+            );
             this.rejectQueuedCompletions(session, err);
             this.sessions.delete(session.userId);
             return;
@@ -378,7 +441,7 @@ export class SessionManager {
             await this.opts.onReply(
               session.userId,
               pending.contextToken,
-              `⚠️ Agent error: ${String(err)}`,
+              `⚠️ Agent error: ${formatError(err)}`,
             );
           } catch {
             // best effort
@@ -405,8 +468,13 @@ export class SessionManager {
 
     const now = Date.now();
     for (const [userId, session] of this.sessions) {
-      if (now - session.lastActivity > this.opts.idleTimeoutMs && !session.processing) {
-        this.opts.log(`Session for ${userId} idle for ${Math.round((now - session.lastActivity) / 60_000)}min, removing`);
+      if (
+        now - session.lastActivity > this.opts.idleTimeoutMs &&
+        !session.processing
+      ) {
+        this.opts.log(
+          `Session for ${userId} idle for ${Math.round((now - session.lastActivity) / 60_000)}min, removing`,
+        );
         killAgent(session.agentInfo.process);
         this.sessions.delete(userId);
       }
@@ -416,7 +484,10 @@ export class SessionManager {
   private evictOldest(): void {
     let oldest: { userId: string; lastActivity: number } | null = null;
     for (const [userId, session] of this.sessions) {
-      if (!session.processing && (!oldest || session.lastActivity < oldest.lastActivity)) {
+      if (
+        !session.processing &&
+        (!oldest || session.lastActivity < oldest.lastActivity)
+      ) {
         oldest = { userId, lastActivity: session.lastActivity };
       }
     }
@@ -424,7 +495,10 @@ export class SessionManager {
       this.opts.log(`Evicting oldest idle session: ${oldest.userId}`);
       const session = this.sessions.get(oldest.userId);
       if (session) {
-        this.rejectQueuedCompletions(session, new Error("Session evicted before queued message was processed"));
+        this.rejectQueuedCompletions(
+          session,
+          new Error('Session evicted before queued message was processed'),
+        );
         killAgent(session.agentInfo.process);
         this.sessions.delete(oldest.userId);
       }

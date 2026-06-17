@@ -1,5 +1,5 @@
 /**
- * Tests for WeChatAcpClient message-flush behaviour.
+ * Tests for YuanBaoAcpClient message-flush behaviour.
  *
  * Verifies that intermediate status messages (flushed at tool_call /
  * thought boundaries) are delivered exactly once even when multiple
@@ -7,24 +7,25 @@
  * the ACP SDK fires notification handlers without awaiting them.
  */
 
-import { test } from "node:test";
-import assert from "node:assert/strict";
-import { WeChatAcpClient } from "../src/acp/client.js";
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { YuanBaoAcpClient } from '../src/acp/client.js';
+import { YuanbaoClient } from '../src/yuanbao/yuanbao-client.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Build a minimal WeChatAcpClient with controllable callbacks. */
+/** Build a minimal YuanBaoAcpClient with controllable callbacks. */
 function makeClient(opts: {
   onMessageFlush?: (text: string) => Promise<void>;
   onThoughtFlush?: (text: string) => Promise<void>;
   sendDelay?: number;
-}): WeChatAcpClient {
+}): YuanBaoAcpClient {
   const { sendDelay = 0 } = opts;
   const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-  return new WeChatAcpClient({
+  return new YuanBaoAcpClient({
     sendTyping: async () => {},
     onThoughtFlush:
       opts.onThoughtFlush ??
@@ -41,21 +42,37 @@ function makeClient(opts: {
   });
 }
 
-async function emitMessageChunk(client: WeChatAcpClient, text: string): Promise<void> {
+async function emitMessageChunk(
+  client: YuanBaoAcpClient,
+  text: string,
+): Promise<void> {
   await client.sessionUpdate({
-    update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } },
+    update: {
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text },
+    },
   } as never);
 }
 
-async function emitToolCall(client: WeChatAcpClient): Promise<void> {
+async function emitToolCall(client: YuanBaoAcpClient): Promise<void> {
   await client.sessionUpdate({
-    update: { sessionUpdate: "tool_call", title: "test-tool", status: "started" },
+    update: {
+      sessionUpdate: 'tool_call',
+      title: 'test-tool',
+      status: 'started',
+    },
   } as never);
 }
 
-async function emitThoughtChunk(client: WeChatAcpClient, text = "thinking…"): Promise<void> {
+async function emitThoughtChunk(
+  client: YuanBaoAcpClient,
+  text = 'thinking…',
+): Promise<void> {
   await client.sessionUpdate({
-    update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text } },
+    update: {
+      sessionUpdate: 'agent_thought_chunk',
+      content: { type: 'text', text },
+    },
   } as never);
 }
 
@@ -63,18 +80,22 @@ async function emitThoughtChunk(client: WeChatAcpClient, text = "thinking…"): 
 // Tests
 // ---------------------------------------------------------------------------
 
-test("single intermediate message is flushed exactly once (sequential)", async () => {
+test('single intermediate message is flushed exactly once (sequential)', async () => {
   const calls: string[] = [];
-  const client = makeClient({ onMessageFlush: async (t) => { calls.push(t); } });
+  const client = makeClient({
+    onMessageFlush: async (t) => {
+      calls.push(t);
+    },
+  });
 
-  await emitMessageChunk(client, "status update");
+  await emitMessageChunk(client, 'status update');
   await emitToolCall(client);
 
   assert.equal(calls.length, 1);
-  assert.equal(calls[0], "status update");
+  assert.equal(calls[0], 'status update');
 });
 
-test("concurrent tool_call events send the buffered message exactly once", async () => {
+test('concurrent tool_call events send the buffered message exactly once', async () => {
   /**
    * The ACP SDK fires notification handlers without awaiting them, so two
    * tool_call notifications can both reach maybeFlushMessage while the first
@@ -89,18 +110,22 @@ test("concurrent tool_call events send the buffered message exactly once", async
     },
   });
 
-  await emitMessageChunk(client, "intermediate status");
+  await emitMessageChunk(client, 'intermediate status');
 
   // Fire two concurrent boundary events without awaiting between them.
   const flush1 = emitToolCall(client);
   const flush2 = emitToolCall(client);
   await Promise.all([flush1, flush2]);
 
-  assert.equal(calls.length, 1, `expected 1 send, got ${calls.length}: ${JSON.stringify(calls)}`);
-  assert.equal(calls[0], "intermediate status");
+  assert.equal(
+    calls.length,
+    1,
+    `expected 1 send, got ${calls.length}: ${JSON.stringify(calls)}`,
+  );
+  assert.equal(calls[0], 'intermediate status');
 });
 
-test("three concurrent boundary events send the message exactly once", async () => {
+test('three concurrent boundary events send the message exactly once', async () => {
   const calls: string[] = [];
   const client = makeClient({
     onMessageFlush: async (text) => {
@@ -109,10 +134,10 @@ test("three concurrent boundary events send the message exactly once", async () 
     },
   });
 
-  await emitMessageChunk(client, "部分搜索结果像是媒体汇总和平台片单混在一起");
+  await emitMessageChunk(client, '部分搜索结果像是媒体汇总和平台片单混在一起');
 
   const p1 = emitToolCall(client);
-  const p2 = emitThoughtChunk(client, "thinking");
+  const p2 = emitThoughtChunk(client, 'thinking');
   const p3 = emitToolCall(client);
   await Promise.all([p1, p2, p3]);
 
@@ -123,47 +148,51 @@ test("three concurrent boundary events send the message exactly once", async () 
   );
 });
 
-test("final answer is delivered after intermediate flush clears the buffer", async () => {
+test('final answer is delivered after intermediate flush clears the buffer', async () => {
   const messageCalls: string[] = [];
   const client = makeClient({
-    onMessageFlush: async (t) => { messageCalls.push(t); },
+    onMessageFlush: async (t) => {
+      messageCalls.push(t);
+    },
   });
   client.newTurn();
 
-  await emitMessageChunk(client, "searching…");
+  await emitMessageChunk(client, 'searching…');
   await emitToolCall(client); // flushes "searching…"
 
-  await emitMessageChunk(client, "here is the answer");
+  await emitMessageChunk(client, 'here is the answer');
   const replyText = await client.flush();
 
   assert.equal(messageCalls.length, 1);
-  assert.equal(messageCalls[0], "searching…");
-  assert.equal(replyText, "here is the answer");
+  assert.equal(messageCalls[0], 'searching…');
+  assert.equal(replyText, 'here is the answer');
 });
 
-test("failed send retains buffer so final flush delivers the message", async () => {
+test('failed send retains buffer so final flush delivers the message', async () => {
   const client = makeClient({
-    onMessageFlush: async () => { throw new Error("WeChat API error"); },
+    onMessageFlush: async () => {
+      throw new Error('transport API error');
+    },
   });
 
-  await emitMessageChunk(client, "status");
+  await emitMessageChunk(client, 'status');
   await emitToolCall(client); // will fail; buffer should be retained
 
   const replyText = await client.flush();
-  assert.equal(replyText, "status");
+  assert.equal(replyText, 'status');
 });
 
-test("two sequential flushes are delivered in order (second waits for first)", async () => {
+test('two sequential flushes are delivered in order (second waits for first)', async () => {
   /**
    * Scenario: chunk A is flushed at boundary-1, then chunk B is flushed at
    * boundary-2 while A's send is still awaiting. The mutex chain must ensure
-   * A completes before B starts, so WeChat always receives A before B.
+   * A completes before B starts, so YuanBao always receives A before B.
    */
   const order: string[] = [];
   let releaseA!: () => void;
   const client = makeClient({
     onMessageFlush: async (text) => {
-      if (text === "chunk A") {
+      if (text === 'chunk A') {
         // Simulate a slow first send
         await new Promise<void>((r) => {
           releaseA = r;
@@ -173,11 +202,11 @@ test("two sequential flushes are delivered in order (second waits for first)", a
     },
   });
 
-  await emitMessageChunk(client, "chunk A");
+  await emitMessageChunk(client, 'chunk A');
   // Fire boundary-1 without awaiting so it blocks on the slow send
   const p1 = emitToolCall(client);
 
-  await emitMessageChunk(client, "chunk B");
+  await emitMessageChunk(client, 'chunk B');
   // Fire boundary-2 — must queue behind A
   const p2 = emitToolCall(client);
 
@@ -185,5 +214,66 @@ test("two sequential flushes are delivered in order (second waits for first)", a
   releaseA();
   await Promise.all([p1, p2]);
 
-  assert.deepEqual(order, ["chunk A", "chunk B"], "second message must arrive after first");
+  assert.deepEqual(
+    order,
+    ['chunk A', 'chunk B'],
+    'second message must arrive after first',
+  );
+});
+
+test('reply reference is extracted from reply message bodies', async () => {
+  const client = new YuanbaoClient({ appId: 'app', appSecret: 'secret' });
+  const replyToMsgId = (client as any).extractReplyToMsgId({
+    msgBody: [
+      {
+        msgType: 'TIMReplyElem',
+        msgContent: {
+          refMsgId: 'reply-123',
+        },
+      },
+    ],
+  });
+
+  assert.equal(replyToMsgId, 'reply-123');
+});
+
+test('mention accounts include TIMCustomElem 1002 user_id', async () => {
+  const client = new YuanbaoClient({ appId: 'app', appSecret: 'secret' });
+  const mentionAccounts = (client as any).extractMentionAccounts({
+    groupAtInfo: [],
+    msgBody: [
+      {
+        msgType: 'TIMCustomElem',
+        msgContent: {
+          data: JSON.stringify({
+            elem_type: 1002,
+            user_id: 'bot-123',
+            text: '@H3你好',
+          }),
+        },
+      },
+    ],
+  });
+
+  assert.deepEqual(mentionAccounts, ['bot-123']);
+});
+
+test('mention texts include TIMCustomElem 1002 text', async () => {
+  const client = new YuanbaoClient({ appId: 'app', appSecret: 'secret' });
+  const mentions = (client as any).extractMentionTextsFromMsgBody({
+    msgBody: [
+      {
+        msgType: 'TIMCustomElem',
+        msgContent: {
+          data: JSON.stringify({
+            elem_type: 1002,
+            user_id: 'bot-123',
+            text: '@H3你好',
+          }),
+        },
+      },
+    ],
+  });
+
+  assert.deepEqual(mentions, ['H3你好']);
 });

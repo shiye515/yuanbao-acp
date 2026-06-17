@@ -6,7 +6,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { Writable, Readable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import packageJson from "../../package.json" with { type: "json" };
-import type { WeChatAcpClient } from "./client.js";
+import type { YuanBaoAcpClient } from "./client.js";
 import { trackException } from "../telemetry/index.js";
 
 export interface AgentProcessInfo {
@@ -16,12 +16,32 @@ export interface AgentProcessInfo {
   configOptions: acp.SessionConfigOption[];
 }
 
+/** Serialize an error that may be a plain JSON-RPC object instead of an Error instance. */
+export function formatError(err: unknown): string {
+  if (err instanceof Error) {
+    return err.stack ?? err.message;
+  }
+  if (typeof err === "object" && err !== null && "message" in err) {
+    const obj = err as { code?: number; message: string; data?: unknown };
+    const parts = [`[${obj.code ?? "error"}] ${obj.message}`];
+    if (
+      obj.data !== undefined &&
+      obj.data !== null &&
+      !(typeof obj.data === "object" && Object.keys(obj.data as object).length === 0)
+    ) {
+      parts.push(`data=${JSON.stringify(obj.data)}`);
+    }
+    return parts.join(" ");
+  }
+  return String(err);
+}
+
 export async function spawnAgent(params: {
   command: string;
   args: string[];
   cwd: string;
   env?: Record<string, string>;
-  client: WeChatAcpClient;
+  client: YuanBaoAcpClient;
   log: (msg: string) => void;
 }): Promise<AgentProcessInfo> {
   const { command, args, cwd, env, client, log } = params;
@@ -40,7 +60,7 @@ export async function spawnAgent(params: {
   });
 
   proc.on("error", (err) => {
-    log(`Agent process error: ${String(err)}`);
+    log(`Agent process error: ${formatError(err)}`);
     trackException(err, "agent_spawn");
   });
 
